@@ -57,13 +57,8 @@ jobs:
           sed -i 's/HOSTCFLAGS   :=/HOSTCFLAGS   := -fcommon /g' Makefile || true
           sed -i 's/HOSTCFLAGS   =/HOSTCFLAGS   = -fcommon /g' Makefile || true
 
-          # Disable -Werror on modem_v1 and kernel tree so enum-compare / format warnings don't break the build
-          sed -i 's/-Werror//g' Makefile || true
+          # Remove -Werror from modem driver Makefiles so enum-compare doesn't halt the build
           find drivers/misc/modem_v1/ -name Makefile -exec sed -i 's/-Werror//g' {} + || true
-          find drivers/misc/modem_v1/ -name Makefile -exec sed -i 's/-Wenum-compare//g' {} + || true
-          
-          # Add -Wno-error=enum-compare and -Wno-enum-compare to KBUILD_CFLAGS
-          sed -i '/KBUILD_CFLAGS   :=/a KBUILD_CFLAGS += -Wno-error=enum-compare -Wno-enum-compare' Makefile || true
 
       - name: Download Official LineageOS GCC 4.9 Toolchains
         run: |
@@ -117,7 +112,7 @@ jobs:
           export HOSTCFLAGS="-fcommon"
           export HOSTCXXFLAGS="-fcommon"
           
-          make -j$(nproc --all) CFLAGS_MODULE="-Wno-error"
+          make -j$(nproc --all) KCFLAGS="-Wno-error=enum-compare -Wno-enum-compare"
 
       - name: Package with AnyKernel3
         run: |
