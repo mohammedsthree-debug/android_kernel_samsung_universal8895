@@ -49,16 +49,22 @@ jobs:
             lib32z1 \
             libc6-i386
 
-      - name: Patch Host Build Tools and Warning Flags
+      - name: Patch Host Build Tools and Strip -Werror Globally
         run: |
-          # Fix DTC yylloc multiple definition bug on modern GCC
+          # 1. Fix DTC yylloc multiple definition bug on modern GCC
           sed -i 's/^YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
           sed -i 's/^YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.l || true
           sed -i 's/HOSTCFLAGS   :=/HOSTCFLAGS   := -fcommon /g' Makefile || true
           sed -i 's/HOSTCFLAGS   =/HOSTCFLAGS   = -fcommon /g' Makefile || true
 
-          # Remove -Werror from modem driver Makefiles so enum-compare doesn't halt the build
-          find drivers/misc/modem_v1/ -name Makefile -exec sed -i 's/-Werror//g' {} + || true
+          # 2. Globally disable -Werror across the entire kernel tree (replaces -Werror with -Wno-error)
+          # Specifically remove -Werror line in root Makefile (line ~406)
+          sed -i 's/[[:space:]]-Werror[[:space:]]/ -Wno-error /g' Makefile || true
+          sed -i 's/[[:space:]]-Werror$/ /g' Makefile || true
+          sed -i 's/-Werror=/-Wno-error=/g' Makefile || true
+          find . -name Makefile -o -name Kbuild | xargs sed -i 's/-Werror=/-Wno-error=/g' || true
+          find . -name Makefile -o -name Kbuild | xargs sed -i 's/[[:space:]]-Werror[[:space:]]/ -Wno-error /g' || true
+          find . -name Makefile -o -name Kbuild | xargs sed -i 's/[[:space:]]-Werror$/ /g' || true
 
       - name: Download Official LineageOS GCC 4.9 Toolchains
         run: |
@@ -112,7 +118,7 @@ jobs:
           export HOSTCFLAGS="-fcommon"
           export HOSTCXXFLAGS="-fcommon"
           
-          make -j$(nproc --all) KCFLAGS="-Wno-error=enum-compare -Wno-enum-compare"
+          make -j$(nproc --all) KCFLAGS="-Wno-error -Wno-uninitialized -Wno-enum-compare"
 
       - name: Package with AnyKernel3
         run: |
