@@ -18,15 +18,15 @@ jobs:
     steps:
       - name: Checkout Fork Repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Switch to Exact Device Commit
+      - name: Fetch and Switch to Exact Device Commit
         run: |
           TARGET_SHA="${{ github.event.inputs.commit_sha || '8d79a2d98eeb0100f890121dd5893b5d2e0b8d9c' }}"
-          echo "Checking out target SHA: $TARGET_SHA"
-          git checkout $TARGET_SHA
-          echo "HEAD is now at:"
+          echo "Fetching target SHA $TARGET_SHA from upstream repository..."
+          git remote add upstream https://github.com/8890q/android_kernel_samsung_universal8895.git || true
+          git fetch --depth=1 upstream $TARGET_SHA
+          git checkout FETCH_HEAD
+          echo "HEAD is now verified at:"
           git log -1 --oneline
 
       - name: Install Build Dependencies
