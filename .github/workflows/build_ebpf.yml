@@ -59,21 +59,52 @@ jobs:
           sed -i 's/HOSTCFLAGS   :=/HOSTCFLAGS   := -fcommon /g' Makefile || true
           sed -i 's/HOSTCFLAGS   =/HOSTCFLAGS   = -fcommon /g' Makefile || true
 
-          echo "=== Phase 3: Strip -Werror globally ==="
-          # Remove -Werror from root Makefile line 406
-          sed -i '/^[[:space:]]*-Werror[[:space:]]*\\\\$/d' Makefile || true
-          sed -i 's/[[:space:]]\+-Werror[[:space:]]*/ /g' Makefile || true
-          # Remove from all sub-Makefiles and Kbuild files
-          find . -path ./toolchain-\* -prune -o \( -name Makefile -o -name Kbuild \) -print | xargs sed -i 's/-Werror / /g; s/-Werror$//g' || true
+          echo "=== Phase 3: Remove standalone -Werror from root Makefile ==="
+          echo "Before patching root Makefile -Werror lines:"
+          grep -n 'Werror' Makefile | head -10
+
+          # CRITICAL: Only remove standalone -Werror, NOT -Werror-implicit-function-declaration
+          # The Makefile has: "		   -Werror \"  as a standalone line (~line 406)
+          # Use Python for precise surgery instead of fragile sed
+          python3 -c "
+import re
+with open('Makefile', 'r') as f:
+    content = f.read()
+# Remove standalone -Werror (with optional whitespace and backslash continuation)
+# This matches lines like '                   -Werror \' or '                   -Werror'
+# But NOT '-Werror-implicit-function-declaration' or '-Werror=something'
+content = re.sub(r'^\s+-Werror\s*\\\\?\s*\n', '', content, flags=re.MULTILINE)
+# Also catch inline standalone -Werror (e.g. in += lines)
+content = re.sub(r'(?<!\w)-Werror(?![-=\w])', '-Wno-error', content)
+with open('Makefile', 'w') as f:
+    f.write(content)
+print('Root Makefile patched successfully')
+"
+
+          echo "After patching root Makefile:"
+          grep -n 'Werror' Makefile | head -10
+
+          # Strip standalone -Werror from ALL sub-Makefiles (but keep -Werror-implicit-function-declaration etc)
+          find . -path ./toolchain-\* -prune -o \( -name Makefile -o -name Kbuild \) -print | \
+            xargs python3 -c "
+import sys, re
+for path in sys.argv[1:]:
+    try:
+        with open(path, 'r') as f:
+            content = f.read()
+        original = content
+        content = re.sub(r'(?<!\w)-Werror(?![-=\w])', '-Wno-error', content)
+        if content != original:
+            with open(path, 'w') as f:
+                f.write(content)
+            print(f'Patched: {path}')
+    except: pass
+"
 
           echo "=== Phase 4: Fix floating-point in kernel decon_reg.c ==="
-          # Samsung BSP uses 'const double' table in decon_reg.c which triggers
-          # '-mgeneral-regs-only and floating point code' error.
-          # Allow FP for that specific file only.
           echo 'CFLAGS_decon_reg.o += -mno-general-regs-only' >> drivers/video/fbdev/exynos/dpu/Makefile
 
           echo "=== Phase 5: Fix displayport_drv.c uninitialized variable ==="
-          # Initialize training_aux_rd_interval to 0 to silence -Wuninitialized
           sed -i 's/training_aux_rd_interval;/training_aux_rd_interval = 0;/g' drivers/video/fbdev/exynos/dpu/displayport_drv.c || true
 
           echo "=== All patches applied ==="
