@@ -1,1 +1,127 @@
 
+name: Build S8+ eBPF Kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: 'Commit SHA to build (default: exact device commit 8d79a2d)'
+        required: true
+        default: '8d79a2d98eeb0100f890121dd5893b5d2e0b8d9c'
+  push:
+    paths:
+      - '.github/workflows/build_ebpf.yml'
+
+jobs:
+  build-kernel:
+    runs-on: ubuntu-20.04
+
+    steps:
+      - name: Checkout Fork Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Switch to Exact Device Commit
+        run: |
+          TARGET_SHA="${{ github.event.inputs.commit_sha || '8d79a2d98eeb0100f890121dd5893b5d2e0b8d9c' }}"
+          echo "Checking out target SHA: $TARGET_SHA"
+          git checkout $TARGET_SHA
+          echo "HEAD is now at:"
+          git log -1 --oneline
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            libncurses5-dev \
+            bison \
+            flex \
+            libssl-dev \
+            libelf-dev \
+            bc \
+            git \
+            zip \
+            unzip \
+            curl \
+            cpio
+
+      - name: Download Official AOSP GCC 4.9 Toolchains
+        run: |
+          echo "Cloning aarch64 toolchain..."
+          git clone --depth 1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 toolchain-aarch64
+          echo "Cloning arm32 toolchain..."
+          git clone --depth 1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 toolchain-arm
+
+      - name: Configure Kernel with eBPF & Uprobes
+        run: |
+          export PATH=$GITHUB_WORKSPACE/toolchain-aarch64/bin:$GITHUB_WORKSPACE/toolchain-arm/bin:$PATH
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-android-
+          export CROSS_COMPILE_ARM32=arm-linux-androideabi-
+          
+          # 1. Base defconfig for Galaxy S8+ (Exynos 8895)
+          make exynos8895-dream2lte_defconfig
+          
+          # 2. Inject eBPF, Uprobes, and Kprobes flags
+          ./scripts/config --enable CONFIG_BPF
+          ./scripts/config --enable CONFIG_BPF_SYSCALL
+          ./scripts/config --enable CONFIG_BPF_JIT
+          ./scripts/config --enable CONFIG_HAVE_BPF_JIT
+          ./scripts/config --enable CONFIG_BPF_EVENTS
+          ./scripts/config --enable CONFIG_UPROBES
+          ./scripts/config --enable CONFIG_UPROBE_EVENTS
+          ./scripts/config --enable CONFIG_KPROBES
+          ./scripts/config --enable CONFIG_KPROBE_EVENTS
+          ./scripts/config --enable CONFIG_DYNAMIC_FTRACE
+          ./scripts/config --enable CONFIG_FUNCTION_TRACER
+          ./scripts/config --enable CONFIG_PERF_EVENTS
+          ./scripts/config --enable CONFIG_NETFILTER_XT_MATCH_BPF
+          ./scripts/config --enable CONFIG_NET_CLS_BPF
+          ./scripts/config --enable CONFIG_NET_ACT_BPF
+          ./scripts/config --disable CONFIG_BPF_UNPRIV_DEFAULT_OFF
+          
+          # 3. Resolve dependencies
+          make olddefconfig
+          
+          echo "=== Verified Target Kernel Flags ==="
+          grep -E "CONFIG_BPF_SYSCALL|CONFIG_BPF_JIT|CONFIG_UPROBES|CONFIG_UPROBE_EVENTS|CONFIG_KPROBES" .config
+
+      - name: Compile Kernel
+        run: |
+          export PATH=$GITHUB_WORKSPACE/toolchain-aarch64/bin:$GITHUB_WORKSPACE/toolchain-arm/bin:$PATH
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-android-
+          export CROSS_COMPILE_ARM32=arm-linux-androideabi-
+          
+          make -j$(nproc --all)
+
+      - name: Package with AnyKernel3
+        run: |
+          git clone https://github.com/osm0sis/AnyKernel3.git AnyKernel3
+          
+          # Configure AnyKernel3 for dream2lte / S8+
+          sed -i 's/device.name1=.*/device.name1=dream2lte/g' AnyKernel3/anykernel.sh
+          sed -i 's/device.name2=.*/device.name2=dreamlte/g' AnyKernel3/anykernel.sh
+          sed -i 's/device.name3=.*/device.name3=greatlte/g' AnyKernel3/anykernel.sh
+          sed -i 's|block=/dev/block/.*|block=/dev/block/by-name/BOOT;|g' AnyKernel3/anykernel.sh
+          sed -i 's/is_slot_device=0/is_slot_device=0/g' AnyKernel3/anykernel.sh
+          
+          # Locate and copy built kernel image
+          if [ -f arch/arm64/boot/Image.gz-dtb ]; then
+            cp arch/arm64/boot/Image.gz-dtb AnyKernel3/Image.gz-dtb
+          elif [ -f arch/arm64/boot/Image.gz ]; then
+            cp arch/arm64/boot/Image.gz AnyKernel3/Image.gz
+          elif [ -f arch/arm64/boot/Image ]; then
+            cp arch/arm64/boot/Image AnyKernel3/Image
+          fi
+
+          cd AnyKernel3
+          zip -r9 ../dream2lte-ebpf-uprobes-kernel.zip * -x .git README.md *placeholder
+
+      - name: Upload Flashable Kernel Zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: dream2lte-ebpf-uprobes-kernel
+          path: dream2lte-ebpf-uprobes-kernel.zip
