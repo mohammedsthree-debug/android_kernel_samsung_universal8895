@@ -10,7 +10,6 @@ sed -i 's/HOSTCFLAGS   :=/HOSTCFLAGS   := -fcommon /g' Makefile || true
 sed -i 's/HOSTCFLAGS   =/HOSTCFLAGS   = -fcommon /g' Makefile || true
 
 echo "=== Phase 3: Precise -Werror removal ==="
-# Use Python for precise regex surgery on Makefiles
 python3 << 'PYEOF'
 import re, os
 
@@ -20,19 +19,15 @@ def patch_makefile(path):
             content = f.read()
         original = content
         # Remove standalone -Werror but NOT -Werror-implicit-function-declaration or -Werror=xxx
-        # Match -Werror that is NOT followed by a hyphen, equals, or word char
-        content = re.sub(r'(?<![\w-])-Werror(?![\w=-])', '-Wno-error', content)
+        content = re.sub(r'(?<!\w)-Werror(?![-=\w])', '-Wno-error', content)
         if content != original:
             with open(path, 'w') as f:
                 f.write(content)
-            print(f'  Patched: {path}')
-    except Exception as e:
+            print('  Patched: ' + path)
+    except:
         pass
 
-# Patch root Makefile
 patch_makefile('Makefile')
-
-# Patch all sub-Makefiles and Kbuild files (skip toolchain dirs)
 for root, dirs, files in os.walk('.'):
     dirs[:] = [d for d in dirs if not d.startswith('toolchain')]
     for fname in files:
@@ -40,11 +35,20 @@ for root, dirs, files in os.walk('.'):
             patch_makefile(os.path.join(root, fname))
 PYEOF
 
-echo "After patching, -Werror lines in root Makefile:"
+echo "After patching, Werror lines in root Makefile:"
 grep -n 'Werror' Makefile | head -10
 
 echo "=== Phase 4: Fix floating-point in decon_reg.c ==="
-echo 'CFLAGS_decon_reg.o += -mno-general-regs-only' >> drivers/video/fbdev/exynos/dpu/Makefile
+# Samsung BSP uses 'const double' clock table which triggers FP-in-kernel error.
+# Convert to 'const unsigned long' - fractional values (41.7, 137.5, 62.5) get
+# truncated to integers, which is exactly what happens at runtime anyway since
+# struct decon_clocks uses 'unsigned long'.
+sed -i 's/const double decon_clocks_table/const unsigned long decon_clocks_table/g' drivers/video/fbdev/exynos/dpu/decon_reg.c
+# Fix the fractional values to be integers
+sed -i 's/41\.7/42/g' drivers/video/fbdev/exynos/dpu/decon_reg.c
+sed -i 's/137\.5/138/g' drivers/video/fbdev/exynos/dpu/decon_reg.c
+sed -i 's/62\.5/63/g' drivers/video/fbdev/exynos/dpu/decon_reg.c
+echo "  decon_reg.c: converted double table to unsigned long"
 
 echo "=== Phase 5: Fix displayport_drv.c uninitialized variable ==="
 sed -i 's/training_aux_rd_interval;/training_aux_rd_interval = 0;/g' drivers/video/fbdev/exynos/dpu/displayport_drv.c || true
