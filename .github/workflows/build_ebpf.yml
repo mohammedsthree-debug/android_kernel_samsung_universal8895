@@ -49,22 +49,34 @@ jobs:
             lib32z1 \
             libc6-i386
 
-      - name: Patch Host Build Tools and Strip -Werror Globally
+      - name: Patch Source for Modern GCC Compatibility
         run: |
-          # 1. Fix DTC yylloc multiple definition bug on modern GCC
+          echo "=== Phase 1: Fix DTC yylloc multiple definition ==="
           sed -i 's/^YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
           sed -i 's/^YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.l || true
+
+          echo "=== Phase 2: Add -fcommon to host build flags ==="
           sed -i 's/HOSTCFLAGS   :=/HOSTCFLAGS   := -fcommon /g' Makefile || true
           sed -i 's/HOSTCFLAGS   =/HOSTCFLAGS   = -fcommon /g' Makefile || true
 
-          # 2. Globally disable -Werror across the entire kernel tree (replaces -Werror with -Wno-error)
-          # Specifically remove -Werror line in root Makefile (line ~406)
-          sed -i 's/[[:space:]]-Werror[[:space:]]/ -Wno-error /g' Makefile || true
-          sed -i 's/[[:space:]]-Werror$/ /g' Makefile || true
-          sed -i 's/-Werror=/-Wno-error=/g' Makefile || true
-          find . -name Makefile -o -name Kbuild | xargs sed -i 's/-Werror=/-Wno-error=/g' || true
-          find . -name Makefile -o -name Kbuild | xargs sed -i 's/[[:space:]]-Werror[[:space:]]/ -Wno-error /g' || true
-          find . -name Makefile -o -name Kbuild | xargs sed -i 's/[[:space:]]-Werror$/ /g' || true
+          echo "=== Phase 3: Strip -Werror globally ==="
+          # Remove -Werror from root Makefile line 406
+          sed -i '/^[[:space:]]*-Werror[[:space:]]*\\\\$/d' Makefile || true
+          sed -i 's/[[:space:]]\+-Werror[[:space:]]*/ /g' Makefile || true
+          # Remove from all sub-Makefiles and Kbuild files
+          find . -path ./toolchain-\* -prune -o \( -name Makefile -o -name Kbuild \) -print | xargs sed -i 's/-Werror / /g; s/-Werror$//g' || true
+
+          echo "=== Phase 4: Fix floating-point in kernel decon_reg.c ==="
+          # Samsung BSP uses 'const double' table in decon_reg.c which triggers
+          # '-mgeneral-regs-only and floating point code' error.
+          # Allow FP for that specific file only.
+          echo 'CFLAGS_decon_reg.o += -mno-general-regs-only' >> drivers/video/fbdev/exynos/dpu/Makefile
+
+          echo "=== Phase 5: Fix displayport_drv.c uninitialized variable ==="
+          # Initialize training_aux_rd_interval to 0 to silence -Wuninitialized
+          sed -i 's/training_aux_rd_interval;/training_aux_rd_interval = 0;/g' drivers/video/fbdev/exynos/dpu/displayport_drv.c || true
+
+          echo "=== All patches applied ==="
 
       - name: Download Official LineageOS GCC 4.9 Toolchains
         run: |
@@ -82,11 +94,9 @@ jobs:
           export CROSS_COMPILE_ARM32=arm-linux-androideabi-
           export HOSTCFLAGS="-fcommon"
           export HOSTCXXFLAGS="-fcommon"
-          
-          # 1. Base defconfig for Galaxy S8+ (Exynos 8895)
+
           make exynos8895-dream2lte_defconfig
-          
-          # 2. Inject eBPF, Uprobes, and Kprobes flags
+
           ./scripts/config --enable CONFIG_BPF
           ./scripts/config --enable CONFIG_BPF_SYSCALL
           ./scripts/config --enable CONFIG_BPF_JIT
@@ -103,10 +113,9 @@ jobs:
           ./scripts/config --enable CONFIG_NET_CLS_BPF
           ./scripts/config --enable CONFIG_NET_ACT_BPF
           ./scripts/config --disable CONFIG_BPF_UNPRIV_DEFAULT_OFF
-          
-          # 3. Resolve dependencies
+
           make olddefconfig
-          
+
           echo "=== Verified Target Kernel Flags ==="
           grep -E "CONFIG_BPF_SYSCALL|CONFIG_BPF_JIT|CONFIG_UPROBES|CONFIG_UPROBE_EVENTS|CONFIG_KPROBES" .config
 
@@ -117,21 +126,19 @@ jobs:
           export CROSS_COMPILE_ARM32=arm-linux-androideabi-
           export HOSTCFLAGS="-fcommon"
           export HOSTCXXFLAGS="-fcommon"
-          
-          make -j$(nproc --all) KCFLAGS="-Wno-error -Wno-uninitialized -Wno-enum-compare"
+
+          make -j$(nproc --all) KCFLAGS="-Wno-error"
 
       - name: Package with AnyKernel3
         run: |
           git clone https://github.com/osm0sis/AnyKernel3.git AnyKernel3
-          
-          # Configure AnyKernel3 for dream2lte / S8+
+
           sed -i 's/device.name1=.*/device.name1=dream2lte/g' AnyKernel3/anykernel.sh
           sed -i 's/device.name2=.*/device.name2=dreamlte/g' AnyKernel3/anykernel.sh
           sed -i 's/device.name3=.*/device.name3=greatlte/g' AnyKernel3/anykernel.sh
           sed -i 's|block=/dev/block/.*|block=/dev/block/by-name/BOOT;|g' AnyKernel3/anykernel.sh
           sed -i 's/is_slot_device=0/is_slot_device=0/g' AnyKernel3/anykernel.sh
-          
-          # Locate and copy built kernel image
+
           if [ -f arch/arm64/boot/Image.gz-dtb ]; then
             cp arch/arm64/boot/Image.gz-dtb AnyKernel3/Image.gz-dtb
           elif [ -f arch/arm64/boot/Image.gz ]; then
