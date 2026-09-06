@@ -48,7 +48,7 @@ jobs:
           echo "$GITHUB_WORKSPACE/toolchain-aarch64/bin" >> $GITHUB_PATH
           echo "$GITHUB_WORKSPACE/toolchain-arm/bin" >> $GITHUB_PATH
 
-      - name: Configure Kernel with eBPF and Uprobes
+      - name: Configure Kernel with eBPF + Kprobes + Full Tracing
         run: |
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-android-
@@ -56,25 +56,64 @@ jobs:
           export HOSTCFLAGS="-fcommon"
           export HOSTCXXFLAGS="-fcommon"
           make exynos8895-dream2lte_defconfig
+
+          # ===== Core BPF =====
           ./scripts/config --enable CONFIG_BPF
           ./scripts/config --enable CONFIG_BPF_SYSCALL
           ./scripts/config --enable CONFIG_BPF_JIT
           ./scripts/config --enable CONFIG_HAVE_BPF_JIT
           ./scripts/config --enable CONFIG_BPF_EVENTS
-          ./scripts/config --enable CONFIG_UPROBES
-          ./scripts/config --enable CONFIG_UPROBE_EVENTS
+          ./scripts/config --disable CONFIG_BPF_UNPRIV_DEFAULT_OFF
+
+          # ===== Kprobes (NEW) =====
           ./scripts/config --enable CONFIG_KPROBES
           ./scripts/config --enable CONFIG_KPROBE_EVENTS
+          ./scripts/config --enable CONFIG_KRETPROBES
+          ./scripts/config --enable CONFIG_HAVE_KPROBES
+          ./scripts/config --enable CONFIG_HAVE_KRETPROBES
+          ./scripts/config --enable CONFIG_OPTPROBES
+          ./scripts/config --enable CONFIG_HAVE_OPTPROBES
+
+          # ===== Uprobes =====
+          ./scripts/config --enable CONFIG_UPROBES
+          ./scripts/config --enable CONFIG_UPROBE_EVENTS
+
+          # ===== Ftrace + Tracing (kprobe dependencies) =====
+          ./scripts/config --enable CONFIG_FTRACE
           ./scripts/config --enable CONFIG_DYNAMIC_FTRACE
+          ./scripts/config --enable CONFIG_DYNAMIC_FTRACE_WITH_REGS
           ./scripts/config --enable CONFIG_FUNCTION_TRACER
+          ./scripts/config --enable CONFIG_FUNCTION_GRAPH_TRACER
+          ./scripts/config --enable CONFIG_FTRACE_SYSCALLS
+          ./scripts/config --enable CONFIG_STACK_TRACER
+          ./scripts/config --enable CONFIG_TRACING
+          ./scripts/config --enable CONFIG_GENERIC_TRACER
+          ./scripts/config --enable CONFIG_TRACEPOINTS
+          ./scripts/config --enable CONFIG_EVENT_TRACING
+          ./scripts/config --enable CONFIG_CONTEXT_SWITCH_TRACER
+          ./scripts/config --enable CONFIG_HAVE_REGS_AND_STACK_ACCESS_API
+
+          # ===== Perf =====
           ./scripts/config --enable CONFIG_PERF_EVENTS
+          ./scripts/config --enable CONFIG_HAVE_PERF_REGS
+          ./scripts/config --enable CONFIG_HAVE_PERF_USER_STACK_DUMP
+
+          # ===== Network BPF =====
           ./scripts/config --enable CONFIG_NETFILTER_XT_MATCH_BPF
           ./scripts/config --enable CONFIG_NET_CLS_BPF
           ./scripts/config --enable CONFIG_NET_ACT_BPF
-          ./scripts/config --disable CONFIG_BPF_UNPRIV_DEFAULT_OFF
+          ./scripts/config --enable CONFIG_NET_CLS_ACT
+          ./scripts/config --enable CONFIG_CGROUP_BPF
+          ./scripts/config --enable CONFIG_NET_SCH_INGRESS
+
+          # ===== BPF filesystem (for pinning maps) =====
+          ./scripts/config --enable CONFIG_DEBUG_INFO
+          ./scripts/config --enable CONFIG_DEBUG_INFO_BTF
+
           make olddefconfig
+
           echo "=== Verified Kernel Flags ==="
-          grep -E "CONFIG_BPF_SYSCALL|CONFIG_BPF_JIT|CONFIG_UPROBES|CONFIG_UPROBE_EVENTS|CONFIG_KPROBES" .config
+          grep -E "CONFIG_BPF_SYSCALL|CONFIG_BPF_JIT|CONFIG_KPROBES|CONFIG_KPROBE_EVENTS|CONFIG_KRETPROBES|CONFIG_UPROBES|CONFIG_UPROBE_EVENTS|CONFIG_FTRACE|CONFIG_DYNAMIC_FTRACE|CONFIG_TRACING|CONFIG_CGROUP_BPF|CONFIG_HAVE_KPROBES" .config
 
       - name: Compile Kernel
         run: |
@@ -100,10 +139,10 @@ jobs:
             cp arch/arm64/boot/Image AnyKernel3/Image
           fi
           cd AnyKernel3
-          zip -r9 ../dream2lte-ebpf-uprobes-kernel.zip * -x .git README.md *placeholder
+          zip -r9 ../dream2lte-ebpf-kprobes-kernel.zip * -x .git README.md *placeholder
 
       - name: Upload Flashable Kernel Zip
         uses: actions/upload-artifact@v4
         with:
-          name: dream2lte-ebpf-uprobes-kernel
-          path: dream2lte-ebpf-uprobes-kernel.zip
+          name: dream2lte-ebpf-kprobes-kernel
+          path: dream2lte-ebpf-kprobes-kernel.zip
